@@ -20,6 +20,10 @@ Library-aware discovery, then a season picker on long shows:
 
 ![Discover with library awareness and season picker](docs/screenshot-discover.jpg)
 
+It knows your whole library, and can tell you what each suggestion is about:
+
+![Recommendations with what's on the server and short descriptions](docs/screenshot-dexter.jpg)
+
 Conversational follow-ups and one-line add (here, a movie → Radarr):
 
 ![Discover and add a movie](docs/screenshot-web.jpg)
