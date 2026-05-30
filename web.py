@@ -211,7 +211,7 @@ async def chat(request: Request):
     if not text:
         return JSONResponse({"reply": "Say something and I'll help."})
     try:
-        reply = await asyncio.to_thread(process_request, sid, text)
+        reply = await asyncio.to_thread(process_request, sid, text, "A web user")
     except Exception as e:
         log.error("process_request failed: %s", e)
         reply = "Something went wrong — please try again."

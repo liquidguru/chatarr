@@ -9,12 +9,17 @@ import logging
 import os
 
 from telegram import Update
-from telegram.ext import Application, CommandHandler, ContextTypes, MessageHandler, filters
+from telegram.ext import (
+    Application, CallbackQueryHandler, CommandHandler, ContextTypes, MessageHandler, filters,
+)
 
 from core import (
     ADMIN_ID,
     ALLOWED_USERS,
+    format_add_result,
     is_allowed,
+    perform_add,
+    pop_pending,
     process_request,
     save_users,
 )
@@ -79,11 +84,33 @@ async def handle_message(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
     await ctx.bot.send_chat_action(chat_id=update.effective_chat.id, action="typing")
     user_id = update.effective_user.id
     try:
-        reply = await asyncio.to_thread(process_request, user_id, update.message.text)
+        reply = await asyncio.to_thread(
+            process_request, user_id, update.message.text, update.effective_user.full_name
+        )
     except Exception as e:
         log.error(f"Error: {e}")
         reply = "Something went wrong — please try again."
     await update.message.reply_text(reply)
+
+async def on_approval(update: Update, ctx: ContextTypes.DEFAULT_TYPE):
+    """Admin tapped Approve/Deny on a pending request."""
+    q = update.callback_query
+    if q.from_user.id != ADMIN_ID:
+        await q.answer("Not authorised.", show_alert=True)
+        return
+    await q.answer()
+    action, _, pid = (q.data or "").partition(":")
+    entry = pop_pending(pid)
+    if not entry:
+        await q.edit_message_text("⚠️ That request was already handled or has expired.")
+        return
+    title = entry.get("title", "(unknown)")
+    requester = entry.get("requester", "Someone")
+    if action == "ap":
+        result = await asyncio.to_thread(perform_add, entry)
+        await q.edit_message_text(f"✅ Approved — {requester}'s request for '{title}'.\n{format_add_result(result)}")
+    else:
+        await q.edit_message_text(f"❌ Denied — {requester}'s request for '{title}'.")
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 
@@ -95,7 +122,8 @@ def main():
     app.add_handler(CommandHandler("remove", cmd_remove))
     app.add_handler(CommandHandler("users",  cmd_users))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-    log.info("media-bot started")
+    app.add_handler(CallbackQueryHandler(on_approval))
+    log.info("bot started")
     app.run_polling(drop_pending_updates=True)
 
 if __name__ == "__main__":

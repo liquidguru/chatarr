@@ -69,6 +69,7 @@ zero changes.
   genre-matched titles from your *whole* library
 - 📺 **Season picker** — for long shows it asks: all / first / latest / specific
 - 🎬 Works with **any** media server (Jellyfin / Emby / Plex)
+- 🛂 **Optional approval workflow** — require admin sign-off before family requests download; you approve via Telegram **Approve / Deny** buttons
 
 ## Requirements
 
@@ -126,6 +127,7 @@ All config is via `.env` (see [`.env.example`](.env.example)):
 |---|---|---|
 | `APP_NAME` | no | Display name (default `Chatarr`) |
 | `FRONTENDS` | no | `web`, `telegram`, or `web,telegram` (default `web`) |
+| `REQUIRE_APPROVAL` | no | If `true`, non-admin requests are queued for admin approval via Telegram Approve/Deny buttons (admin's own requests skip it). Needs Telegram configured. Default off |
 | `GROQ_API_KEY` | **yes** | Groq LLM key |
 | `TMDB_TOKEN` | **yes** | TMDB v4 read access token |
 | `SONARR_URL` / `SONARR_KEY` | **yes** | Sonarr address + API key |

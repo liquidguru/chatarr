@@ -35,6 +35,12 @@ SONARR_KEY = os.environ["SONARR_KEY"]
 RADARR_URL = os.environ.get("RADARR_URL", "http://radarr:7878")
 RADARR_KEY = os.environ["RADARR_KEY"]
 
+# Optional approval gate: when on, non-admin "add" requests are queued and the
+# admin is pinged on Telegram with Approve/Deny buttons instead of adding right away.
+TELEGRAM_TOKEN   = os.environ.get("TELEGRAM_TOKEN", "")
+REQUIRE_APPROVAL = os.environ.get("REQUIRE_APPROVAL", "").strip().lower() in ("1", "true", "yes", "on")
+PENDING_FILE     = Path("/data/pending.json")
+
 GROQ_MODEL  = "llama-3.3-70b-versatile"
 TMDB_BASE   = "https://api.themoviedb.org/3"
 DATA_FILE   = Path("/data/users.json")
@@ -563,9 +569,95 @@ def format_add_result(result: str) -> str:
         return result[len("SEARCH_TRIGGERED:"):].strip()
     if result.startswith("ADDED:"):
         return result[len("ADDED:"):].strip()
+    if result.startswith("PENDING:"):
+        return result[len("PENDING:"):].strip()
     if result.startswith("ERROR:"):
         return f"Sorry, that didn't work: {result[len('ERROR:'):].strip()}"
     return result
+
+# ── Request approval (optional, REQUIRE_APPROVAL) ──────────────────────────────
+# Non-admin "add" requests get queued to PENDING_FILE and the admin is pinged on
+# Telegram with Approve/Deny buttons instead of adding immediately. The Telegram
+# bot process handles the taps and calls perform_add(). PENDING_FILE lives on the
+# shared /data volume so the web and telegram processes/containers both see it.
+
+def _load_pending() -> dict:
+    if PENDING_FILE.exists():
+        try:
+            return json.loads(PENDING_FILE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+def _save_pending(d: dict):
+    PENDING_FILE.parent.mkdir(parents=True, exist_ok=True)
+    tmp = PENDING_FILE.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(d))
+    tmp.replace(PENDING_FILE)
+
+def add_pending(entry: dict) -> str:
+    d = _load_pending()
+    pid = os.urandom(4).hex()
+    entry["id"] = pid
+    entry["ts"] = time.time()
+    d[pid] = entry
+    _save_pending(d)
+    return pid
+
+def pop_pending(pid: str):
+    d = _load_pending()
+    entry = d.pop(pid, None)
+    if entry is not None:
+        _save_pending(d)
+    return entry
+
+def notify_admin_request(pid: str, entry: dict):
+    """Ping the admin on Telegram with Approve/Deny buttons. No-op if Telegram unset."""
+    if not (TELEGRAM_TOKEN and ADMIN_ID):
+        log.warning("REQUIRE_APPROVAL is on but Telegram isn't configured — request %s queued with no notification.", pid)
+        return
+    where = "Radarr" if entry.get("media_type") == "movie" else "Sonarr"
+    text = (f"🎬 *{entry.get('requester', 'Someone')}* requested:\n"
+            f"*{entry.get('title', '(unknown)')}*\n\n"
+            f"Approve to add to {where}.")
+    keyboard = {"inline_keyboard": [[
+        {"text": "✅ Approve", "callback_data": f"ap:{pid}"},
+        {"text": "❌ Deny", "callback_data": f"dn:{pid}"},
+    ]]}
+    try:
+        httpx.post(
+            f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage",
+            json={"chat_id": ADMIN_ID, "text": text, "parse_mode": "Markdown", "reply_markup": keyboard},
+            timeout=10,
+        )
+    except Exception as e:
+        log.error("Failed to notify admin of request %s: %s", pid, e)
+
+def perform_add(entry: dict) -> str:
+    """Run the actual add for an approved request."""
+    try:
+        return TOOL_FN[entry["tool"]](entry["args"])
+    except Exception as e:
+        return f"ERROR: {e}"
+
+def _execute_add(name: str, args: dict, is_admin: bool, requester_name: str) -> str:
+    """Either perform an add immediately, or queue it for admin approval."""
+    if REQUIRE_APPROVAL and not is_admin:
+        entry = {
+            "tool": name,
+            "args": args,
+            "media_type": "movie" if name == "add_movie" else "tv",
+            "title": args.get("title", "(unknown)"),
+            "requester": requester_name or "A web user",
+        }
+        pid = add_pending(entry)
+        notify_admin_request(pid, entry)
+        log.info("Queued for approval: '%s' (%s) by %s", entry["title"], pid, entry["requester"])
+        return f"PENDING: '{entry['title']}' has been sent for approval — you'll get it once it's approved."
+    try:
+        return TOOL_FN[name](args)
+    except Exception as e:
+        return f"ERROR: {e}"
 
 groq_client = Groq(api_key=GROQ_API_KEY)
 
@@ -573,8 +665,9 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # session_key is the Telegram user_id (int) for the bot, or a web session id (str) for the web frontend.
 _user_sessions: dict = {}
 
-def process_request(user_id, text: str) -> str:
+def process_request(user_id, text: str, requester_name: str = None) -> str:
     now = time.time()
+    is_admin = isinstance(user_id, int) and user_id == ADMIN_ID
 
     # Load existing session or start fresh
     session = _user_sessions.get(user_id)
@@ -597,14 +690,16 @@ def process_request(user_id, text: str) -> str:
                 func_name, args = _recover_malformed(err)
                 if func_name and func_name in TOOL_FN:
                     log.info("Recovering malformed call: %s %s", func_name, args)
+                    if func_name in ADD_TOOLS:
+                        result = _execute_add(func_name, args or {}, is_admin, requester_name)
+                        log.info("Tool %s → %s", func_name, str(result)[:120])
+                        _user_sessions[user_id] = {"messages": [], "last_active": now}
+                        return format_add_result(result)
                     try:
                         result = TOOL_FN[func_name](args or {})
                     except Exception as te:
                         result = f"ERROR: {te}"
                     log.info("Tool %s → %s", func_name, str(result)[:120])
-                    if func_name in ADD_TOOLS:
-                        _user_sessions[user_id] = {"messages": [], "last_active": now}
-                        return format_add_result(result)
                     # Search/discover tool — inject result and continue
                     fake_id = f"recover_{i}"
                     messages.append({"role": "assistant", "content": None, "tool_calls": [
@@ -634,13 +729,17 @@ def process_request(user_id, text: str) -> str:
         add_result = None
         for tc in msg.tool_calls:
             args = json.loads(tc.function.arguments)
-            try:
-                result = TOOL_FN[tc.function.name](args)
-            except Exception as e:
-                result = f"ERROR: {e}"
-            log.info("Tool %s → %s", tc.function.name, result[:120])
+            name = tc.function.name
+            if name in ADD_TOOLS:
+                result = _execute_add(name, args, is_admin, requester_name)
+            else:
+                try:
+                    result = TOOL_FN[name](args)
+                except Exception as e:
+                    result = f"ERROR: {e}"
+            log.info("Tool %s → %s", name, result[:120])
             messages.append({"role": "tool", "tool_call_id": tc.id, "content": result})
-            if tc.function.name in ADD_TOOLS:
+            if name in ADD_TOOLS:
                 add_result = result
 
         if add_result is not None:
