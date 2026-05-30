@@ -1,0 +1,17 @@
+services:
+  chatarr:
+    # Build from source (default for a cloned repo):
+    build: .
+    image: chatarr:latest
+    # --- OR use the prebuilt image instead of building ---
+    # comment out `build: .` above and use:
+    # image: ghcr.io/liquidguru/chatarr:latest
+    container_name: chatarr
+    restart: unless-stopped
+    env_file:
+      - .env
+    # The web port is only needed if FRONTENDS includes "web".
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/data
