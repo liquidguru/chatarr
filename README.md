@@ -79,18 +79,32 @@ zero changes.
 
 ## Quick start (Docker)
 
+### Easiest — prebuilt image (no build step)
+
+A multi-arch image (amd64 + arm64) is published to GHCR:
+
+```bash
+mkdir chatarr && cd chatarr
+curl -O https://raw.githubusercontent.com/liquidguru/chatarr/main/.env.example
+mv .env.example .env       # fill in your keys
+docker run -d --name chatarr --env-file .env -p 8080:8080 \
+  -v "$(pwd)/data:/data" ghcr.io/liquidguru/chatarr:latest
+```
+
+Prefer compose? Download `docker-compose.yml`, switch it to the published image
+(set `image: ghcr.io/liquidguru/chatarr:latest`, comment out `build: .`), then
+`docker compose up -d`.
+
+### From source
+
 ```bash
 git clone https://github.com/liquidguru/chatarr.git
 cd chatarr
-cp .env.example .env      # fill in your keys
-docker compose up -d      # builds the image locally (~30s)
+cp .env.example .env       # fill in your keys
+docker compose up -d       # builds locally
 ```
 
 Open `http://<host>:8080` (if `FRONTENDS` includes `web`), or message your bot.
-
-> No prebuilt image is published yet — `docker compose` builds it for you. A
-> `ghcr.io` image may come later; the compose file already has a commented line
-> ready to switch to it.
 
 ### Without Docker
 
