@@ -611,6 +611,9 @@ def pop_pending(pid: str):
         _save_pending(d)
     return entry
 
+def list_pending() -> list:
+    return sorted(_load_pending().values(), key=lambda e: e.get("ts", 0))
+
 def notify_admin_request(pid: str, entry: dict):
     """Ping the admin on Telegram with Approve/Deny buttons. No-op if Telegram unset."""
     if not (TELEGRAM_TOKEN and ADMIN_ID):
@@ -665,9 +668,10 @@ groq_client = Groq(api_key=GROQ_API_KEY)
 # session_key is the Telegram user_id (int) for the bot, or a web session id (str) for the web frontend.
 _user_sessions: dict = {}
 
-def process_request(user_id, text: str, requester_name: str = None) -> str:
+def process_request(user_id, text: str, requester_name: str = None, is_admin: bool = None) -> str:
     now = time.time()
-    is_admin = isinstance(user_id, int) and user_id == ADMIN_ID
+    if is_admin is None:
+        is_admin = isinstance(user_id, int) and user_id == ADMIN_ID
 
     # Load existing session or start fresh
     session = _user_sessions.get(user_id)
