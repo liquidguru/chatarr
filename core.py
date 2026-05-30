@@ -149,8 +149,18 @@ def search_movie(query: str) -> str:
         return f"Radarr unreachable: {e}"
 
 def add_movie(tmdb_id, title: str) -> str:
-    tmdb_id = int(tmdb_id)
     try:
+        tmdb_id = int(tmdb_id)
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    try:
+        # Resolve/verify the TMDB id by title — the LLM sometimes passes a guessed
+        # id (e.g. the year) on a cold "add X" with no prior search. If the given id
+        # isn't among the title's lookup results, trust the best title match instead.
+        lookup = arr_get(RADARR_URL, RADARR_KEY, "/movie/lookup", {"term": title})
+        if lookup and not any(r.get("tmdbId") == tmdb_id for r in lookup):
+            tmdb_id = lookup[0].get("tmdbId", tmdb_id)
+            title = lookup[0].get("title", title)
         existing = arr_get(RADARR_URL, RADARR_KEY, "/movie")
         match = next((m for m in existing if m["tmdbId"] == tmdb_id), None)
         if match:
@@ -197,9 +207,22 @@ def add_tv(tmdb_id, title: str, seasons: str = "all") -> str:
     and specific numbers set the seasons array directly (Sonarr v4 doesn't accept
     those strings in addOptions.monitor).
     """
-    tmdb_id = int(tmdb_id)
     try:
-        # Check existing library by TMDB ID
+        tmdb_id = int(tmdb_id)
+    except (TypeError, ValueError):
+        tmdb_id = 0
+    try:
+        # Look up the full series object by title first (also needed for the seasons
+        # array on POST). This corrects a guessed tmdb_id from a cold "add X" — prefer
+        # an exact id match, else fall back to the best title match.
+        lookup = arr_get(SONARR_URL, SONARR_KEY, "/series/lookup", {"term": title})
+        if not lookup:
+            return f"ERROR: Could not find '{title}' in Sonarr's database."
+        series_data = next((r for r in lookup if r.get("tmdbId") == tmdb_id), lookup[0])
+        tmdb_id = series_data.get("tmdbId", tmdb_id)
+        title = series_data.get("title", title)
+
+        # Check existing library by the resolved TMDB id
         existing = arr_get(SONARR_URL, SONARR_KEY, "/series")
         match = next((s for s in existing if s.get("tmdbId") == tmdb_id), None)
         if match:
@@ -211,16 +234,6 @@ def add_tv(tmdb_id, title: str, seasons: str = "all") -> str:
                 "name": "SeriesSearch", "seriesId": match["id"]
             })
             return f"SEARCH_TRIGGERED: '{title}' was in Sonarr but not downloaded — triggered a fresh search."
-
-        # Look up full series object from Sonarr (includes seasons array required for POST)
-        lookup = arr_get(SONARR_URL, SONARR_KEY, "/series/lookup", {"term": title})
-        if not lookup:
-            return f"ERROR: Could not find '{title}' in Sonarr's database."
-        # Prefer exact TMDB ID match; fall back to first result
-        series_data = next(
-            (r for r in lookup if r.get("tmdbId") == tmdb_id),
-            lookup[0]
-        )
 
         qp = cached("sonarr_qp", lambda: arr_get(SONARR_URL, SONARR_KEY, "/qualityprofile")[0]["id"])
         rf = cached("sonarr_rf", lambda: arr_get(SONARR_URL, SONARR_KEY, "/rootfolder")[0]["path"])
