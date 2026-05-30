@@ -16,10 +16,15 @@ page.
 
 ## Screenshots
 
-<!-- Drop your PNGs in ./docs and they'll render here. -->
-| Web chat | Discover & add | Season picker |
-|---|---|---|
-| ![web](docs/screenshot-web.png) | ![discover](docs/screenshot-discover.png) | ![seasons](docs/screenshot-seasons.png) |
+Library-aware discovery, then a season picker on long shows:
+
+![Discover with library awareness and season picker](docs/screenshot-discover.jpg)
+
+Conversational follow-ups and one-line add (here, a movie → Radarr):
+
+![Discover and add a movie](docs/screenshot-web.jpg)
+
+*(The name and accent colour are just an example instance — set `APP_NAME` to whatever you like.)*
 
 ---
 
@@ -72,41 +77,28 @@ zero changes.
 > Chatarr requires Sonarr/Radarr — it's the layer it sends requests to. Your media
 > server choice is irrelevant.
 
-## Quick start
-
-### Option A — prebuilt image (easiest)
-
-```bash
-mkdir chatarr && cd chatarr
-curl -O https://raw.githubusercontent.com/liquidguru/chatarr/main/docker-compose.yml
-curl -O https://raw.githubusercontent.com/liquidguru/chatarr/main/.env.example
-mv .env.example .env
-# edit .env with your keys, then:
-docker compose up -d
-```
-
-Make sure `docker-compose.yml` points at the published image
-(`image: ghcr.io/liquidguru/chatarr:latest`, with `build: .` commented out).
-
-### Option B — build from source
+## Quick start (Docker)
 
 ```bash
 git clone https://github.com/liquidguru/chatarr.git
 cd chatarr
-cp .env.example .env      # edit with your keys
-docker compose up -d      # builds the image locally
+cp .env.example .env      # fill in your keys
+docker compose up -d      # builds the image locally (~30s)
 ```
+
+Open `http://<host>:8080` (if `FRONTENDS` includes `web`), or message your bot.
+
+> No prebuilt image is published yet — `docker compose` builds it for you. A
+> `ghcr.io` image may come later; the compose file already has a commented line
+> ready to switch to it.
 
 ### Without Docker
 
 ```bash
 pip install -r requirements.txt
-# export the variables from .env, then:
+# export the variables from your .env, then:
 python run.py
 ```
-
-Open the web page at `http://<host>:8080` (if `FRONTENDS` includes `web`), or
-message your Telegram bot.
 
 ## Configuration
 
