@@ -133,7 +133,7 @@ All config is via `.env` (see [`.env.example`](.env.example)):
 | `SONARR_URL` / `SONARR_KEY` | **yes** | Sonarr address + API key |
 | `RADARR_URL` / `RADARR_KEY` | **yes** | Radarr address + API key |
 | `WEB_PASSWORD` | no | Access code for the web page; blank = open |
-| `WEB_PORT` | no | Web port (default `8080`) |
+| `WEB_PORT` | no | Port the app listens on **inside** the container (default `8080`). With Docker, leave this and set the host port via the compose `ports:` mapping (`HOST:8080`) — don't crossover the two |
 | `TELEGRAM_TOKEN` | telegram only | Bot token from @BotFather |
 | `ADMIN_ID` | telegram only | Your numeric Telegram id (admin / first allowed user) |
 

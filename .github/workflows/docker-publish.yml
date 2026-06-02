@@ -7,6 +7,8 @@ on:
     paths-ignore:
       - "**.md"
       - "docs/**"
+      - ".env.example"
+      - "docker-compose.yml"
   workflow_dispatch:
 
 jobs:

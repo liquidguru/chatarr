@@ -10,7 +10,9 @@ services:
     restart: unless-stopped
     env_file:
       - .env
-    # The web port is only needed if FRONTENDS includes "web".
+    # Only needed if FRONTENDS includes "web". Format is HOST:CONTAINER.
+    # The app listens on 8080 INSIDE the container — to change the port you reach
+    # it on, edit the LEFT number only (e.g. "9970:8080"). Don't change WEB_PORT.
     ports:
       - "8080:8080"
     volumes:
