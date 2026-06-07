@@ -560,13 +560,14 @@ Tools available:
 IMPORTANT rules:
 1. Never use search_tv or add_tv for a movie. Never use search_movie or add_movie for a TV show.
 2. Both add_movie and add_tv use tmdb_id. If a title appeared in discover or search results and you have its tmdb_id, call add_movie or add_tv directly without searching again.
-3. When showing results, organise as "On the server" and "Not on the server". Put a BLANK LINE before each of those two headings so they stand out. Each title appears in exactly ONE list, never both. Do NOT show tmdb_id or any numeric IDs in your reply — just the title and year. End with a short question asking which ones to add.
+3. When showing results, organise as "On the server" and "Not on the server". Put a BLANK LINE before each of those two headings so they stand out. Each title appears in exactly ONE list, never both. Do NOT show tmdb_id or any numeric IDs in your reply — just the title and year. End with a short question asking which titles from the "Not on the server" list to add — NEVER ask about adding titles from "On the server".
 4. For TV shows with more than 3 seasons: before calling add_tv, ask the user whether they want all seasons, just the first, the latest, or specific seasons (e.g. "seasons 1 and 2"). Use their answer as the seasons parameter. If the show has 3 or fewer seasons, just add all without asking.
-5. When a user asks for more details about a title that appeared in discover results (e.g. "tell me about that one", "what's it about"), use the overview already returned by discover — do not invent or guess details from training data.
+5. When a user asks for more details about a title that appeared in discover results (e.g. "tell me about that one", "what's it about"), use the overview already returned by discover — do not invent or guess details from training data. If the title was in the "On the server" list, end your reply by telling the user it is already available to watch — NEVER ask if they want to add it.
 6. Never include <function=...> or any code syntax in your reply — tool calls happen automatically, never in the message text.
 7. ONLY present titles that came from a tool result (discover, search_tv, search_movie, list_library). Never list titles from your own training knowledge.
 8. The "On the server" vs "Not on the server" split MUST come from each result's in_library flag — never decide it yourself.
-9. If discover returns "Nothing found" or an ERROR, tell the user you could not find matches for that title and ask them to try another — do NOT invent a list of titles."""
+9. If discover returns "Nothing found" or an ERROR, tell the user you could not find matches for that title and ask them to try another — do NOT invent a list of titles.
+10. If a title appeared under "On the server" in any previous response in this conversation, it is already in the library. In ALL follow-up messages about that title — details, reviews, cast, anything — do NOT ask if the user wants to add it. Do NOT call add_movie or add_tv for it. If they ask to add it, tell them it is already available to watch."""
 
 ADD_TOOLS = {"add_movie", "add_tv"}
 
@@ -574,6 +575,56 @@ _FUNC_TAG = re.compile(r'<function=\w+[^<]*</function>', re.DOTALL)
 
 def clean_response(text: str) -> str:
     return _FUNC_TAG.sub('', text).strip()
+
+# ── Already-owned add-offer guard ─────────────────────────────────────────────
+# llama-3.3-70b often offers to "add" a title even when it's already on the
+# server (its describe→offer prior beats the system-prompt rules). This reads the
+# in_library flags from prior tool results and strips a trailing add-offer when
+# the reply is clearly about an owned title only. Deterministic, no extra API call.
+
+_OWNED_OFFER = re.compile(
+    r'(?:^|(?<=[.?!]))\s*([^.?!]*\badd(?:ed|ing)?\b[^.?!]*[?.!])\s*$', re.I)
+
+def _library_titles_from_history(messages: list):
+    """Scan tool results in the conversation for owned / not-owned titles."""
+    owned, unowned = set(), set()
+    for m in messages:
+        if m.get("role") != "tool":
+            continue
+        try:
+            data = json.loads(m.get("content") or "")
+        except (json.JSONDecodeError, ValueError, TypeError):
+            continue
+        if not isinstance(data, dict):
+            continue
+        if "results" in data:           # discover result
+            for it in data.get("results", []):
+                t = (it.get("title") or "").strip().lower()
+                if t:
+                    (owned if it.get("in_library") else unowned).add(t)
+        elif "items" in data:           # list_library result
+            for it in data.get("items", []):
+                t = (it.get("title") or "").strip().lower()
+                if t and (it.get("has_file") or it.get("episodes_downloaded", 0) > 0):
+                    owned.add(t)
+    return owned, unowned
+
+def _suppress_owned_add_offer(text: str, owned: set, unowned: set) -> str:
+    """Drop a trailing 'want me to add it?' when the reply is about an owned title."""
+    if not text or not owned:
+        return text
+    low = text.lower()
+    if "not on the server" in low:      # the dual-list reply — rule 3 owns it
+        return text
+    m = _OWNED_OFFER.search(text)
+    if not m:
+        return text
+    offer = m.group(1).lower()
+    if not any(w in offer for w in ("would you", "want", "shall", "should", "can i", "i can", "let me know")):
+        return text
+    if any(t in low for t in owned) and not any(t in low for t in unowned):
+        return text[:m.start(1)].rstrip() + "\n\nGood news — it's already on the server, ready to watch."
+    return text
 
 def format_add_result(result: str) -> str:
     if result.startswith("ALREADY_HAVE:"):
@@ -726,6 +777,8 @@ def process_request(user_id, text: str, requester_name: str = None, is_admin: bo
                     messages.append({"role": "tool", "tool_call_id": fake_id, "content": result})
                     continue
             log.error("Groq error: %s", e)
+            if any(x in err for x in ("rate_limit", "Too Many Requests", "429")):
+                return "Daily usage limit reached — please try again in a few minutes."
             return "Something went wrong — please try again."
 
         msg = resp.choices[0].message
@@ -741,7 +794,8 @@ def process_request(user_id, text: str, requester_name: str = None, is_admin: bo
         if not msg.tool_calls:
             # Save conversation history (strip system message)
             _user_sessions[user_id] = {"messages": messages[1:], "last_active": now}
-            return clean_response(msg.content or "Done.")
+            owned, unowned = _library_titles_from_history(messages)
+            return _suppress_owned_add_offer(clean_response(msg.content or "Done."), owned, unowned)
 
         add_result = None
         for tc in msg.tool_calls:
